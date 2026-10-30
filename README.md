@@ -1,8 +1,10 @@
 # WebhookLab
 
+[**Open live demo**](https://webhooklab-umber.vercel.app) · [Verification record](docs/verification.md) · [Source & architecture](docs/architecture.md)
+
 **Every event. Understood.** A polished webhook capture, inspection, and recovery workbench by [Tanveer Singh](https://singhtanveer.com).
 
-![WebhookLab social preview](public/og.svg)
+![Live WebhookLab workspace](docs/preview.jpg)
 
 ## What works
 
