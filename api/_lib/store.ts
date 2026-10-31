@@ -41,7 +41,11 @@ function config(app: string, token: string) {
     throw new StorageError();
   return {
     base: url.origin,
-    headers: { apikey: key, 'x-demo-token': token, 'Content-Type': 'application/json' },
+    headers: {
+      apikey: key,
+      'x-demo-token': token,
+      'Content-Type': 'application/json',
+    },
   };
 }
 function clone<T>(value: T): T {

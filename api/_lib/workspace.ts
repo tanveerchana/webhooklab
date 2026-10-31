@@ -1,3 +1,6 @@
+import { requireAccountSession } from './auth.js';
+import { loadAccountWorkspace, mutateAccountWorkspace } from './account.js';
+import { ApiError, enforceMutationOrigin, sendApiError, workspaceId } from './account-http.js';
 import {
   ContentionError,
   loadWorkspace,
@@ -14,7 +17,7 @@ export interface WorkspaceRequest {
 }
 export interface WorkspaceResponse {
   statusCode: number;
-  setHeader(name: string, value: string): unknown;
+  setHeader(name: string, value: string | string[]): unknown;
   end(body?: string): unknown;
 }
 const MAX_BODY = 64 * 1024;
@@ -80,6 +83,49 @@ export function createWorkspaceHandler<T>(options: {
       res.statusCode = status;
       res.end(JSON.stringify(body));
     };
+    const mode = req.headers['x-workspace-mode'];
+    if (mode === 'account') {
+      try {
+        if (req.method !== 'GET' && req.method !== 'POST') {
+          res.setHeader('Allow', 'GET, POST');
+          throw new ApiError(405, 'Method not allowed.');
+        }
+        if (req.method === 'POST') enforceMutationOrigin(req);
+        const session = await requireAccountSession(options.app, req, res);
+        const id = workspaceId(req);
+        if (req.method === 'GET') {
+          send(200, await loadAccountWorkspace(options.app, id, session));
+          return;
+        }
+        const command = await readCommand(req);
+        send(
+          200,
+          await mutateAccountWorkspace(options.app, id, session, command.type as string, (state) =>
+            options.reduce(state as T, command),
+          ),
+        );
+      } catch (error) {
+        if (error instanceof ContentionError) {
+          send(409, { error: error.message });
+          return;
+        }
+        if (error instanceof ApiError) {
+          sendApiError(res, error);
+          return;
+        }
+        send(400, {
+          error:
+            error instanceof Error && error.message.length <= 250
+              ? error.message
+              : 'The command could not be applied.',
+        });
+      }
+      return;
+    }
+    if (mode !== undefined && mode !== 'demo') {
+      send(400, { error: 'Choose demo or account mode.' });
+      return;
+    }
     const authorization = req.headers.authorization;
     const match =
       typeof authorization === 'string' ? /^Bearer ([a-f0-9]{64})$/.exec(authorization) : null;

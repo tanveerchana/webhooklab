@@ -1,0 +1,405 @@
+.access-root,
+.access-screen,
+.access-backdrop {
+  color: #18212f;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+.access-screen,
+.access-backdrop,
+.access-toolbar,
+.access-card,
+.access-dialog,
+.access-feedback {
+  box-sizing: border-box;
+}
+.access-screen {
+  min-height: 100vh;
+  padding: 48px 20px;
+  background: #f6f8fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.access-screen.access-workspace-screen {
+  min-height: calc(100vh - 112px);
+}
+.access-card {
+  width: 100%;
+  max-width: 480px;
+  border: 1px solid #d8e0e9;
+  border-radius: 12px;
+  background: #fff;
+  padding: 32px;
+  box-shadow: 0 4px 14px #18212f08;
+}
+.access-toolbar button,
+.access-screen button,
+.access-dialog button,
+.access-toolbar input,
+.access-screen input,
+.access-dialog input,
+.access-toolbar select,
+.access-screen select,
+.access-dialog select {
+  box-sizing: border-box;
+  min-height: 44px;
+  height: auto;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  letter-spacing: normal;
+  border: 1px solid #bdc9d8;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 0;
+  box-shadow: none;
+  text-transform: none;
+}
+.access-root .access-toolbar button,
+.access-screen button,
+.access-dialog button {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.access-root .access-toolbar button.access-secondary,
+.access-screen button.access-secondary,
+.access-dialog button.access-secondary {
+  background: #fff;
+  color: #243247;
+  border-color: #bdc9d8;
+}
+.access-root .access-toolbar button:hover,
+.access-screen button:hover,
+.access-dialog button:hover {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1d4ed8;
+  transform: none;
+}
+.access-root .access-toolbar button.access-secondary:hover,
+.access-screen button.access-secondary:hover,
+.access-dialog button.access-secondary:hover {
+  background: #eef3f8;
+  color: #18212f;
+  border-color: #94a3b8;
+}
+.access-root .access-toolbar button:disabled,
+.access-screen button:disabled,
+.access-dialog button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  transform: none;
+}
+.access-toolbar input,
+.access-screen input,
+.access-dialog input,
+.access-toolbar select,
+.access-screen select,
+.access-dialog select {
+  background: #fff;
+  color: #18212f;
+  width: 100%;
+  min-width: 0;
+}
+.access-toolbar input::placeholder,
+.access-screen input::placeholder,
+.access-dialog input::placeholder {
+  color: #64748b;
+}
+.access-toolbar :focus-visible,
+.access-screen :focus-visible,
+.access-dialog :focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+.access-card h1,
+.access-dialog h2,
+.access-dialog h3 {
+  font-family: inherit;
+  text-transform: none;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: #18212f;
+  margin: 0 0 16px;
+  font-weight: 700;
+}
+.access-card h1 {
+  font-size: 30px;
+}
+.access-dialog h2 {
+  font-size: 24px;
+}
+.access-dialog h3 {
+  font-size: 18px;
+  margin-top: 28px;
+}
+.access-card p,
+.access-dialog p {
+  font-size: 16px;
+  margin: 0 0 20px;
+  color: #475569;
+  line-height: 1.6;
+}
+.access-card p.access-eyebrow {
+  color: #2563eb;
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0 0;
+}
+.access-form label,
+.access-create label {
+  color: #243247;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.access-form input + label {
+  margin-top: 10px;
+}
+.access-form button {
+  margin-top: 10px;
+}
+.access-tabs,
+.access-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.access-tabs {
+  margin: 24px 0;
+}
+.access-tabs button {
+  flex: 1;
+}
+.access-card .access-help,
+.access-dialog .access-help,
+.access-toolbar .access-help {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #526176;
+  margin: 0;
+}
+.access-demo-choice {
+  border-top: 1px solid #d8e0e9;
+  margin-top: 28px;
+  padding-top: 24px;
+}
+.access-demo-choice p {
+  margin-bottom: 12px;
+}
+.access-toolbar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 24px;
+  border-bottom: 1px solid #d8e0e9;
+  background: #fff;
+  color: #18212f;
+}
+.access-toolbar-identity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+.access-toolbar-identity strong {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.access-workspace-select {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.access-workspace-select label {
+  color: #526176;
+  font-size: 14px;
+}
+.access-workspace-select select {
+  max-width: 260px;
+  min-width: 150px;
+}
+.access-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.access-feedback {
+  background: #f6f8fa;
+  padding: 12px 24px;
+}
+.access-error,
+.access-card p.access-error,
+.access-dialog p.access-error {
+  background: #fff1f2;
+  color: #9f1239;
+  border: 1px solid #fecdd3;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.access-notice,
+.access-card p.access-notice,
+.access-dialog p.access-notice {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.access-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #18212f66;
+  padding: 28px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.access-dialog {
+  background: #fff;
+  width: 100%;
+  max-width: 680px;
+  max-height: calc(100dvh - 56px);
+  overflow-y: auto;
+  border: 1px solid #bdc9d8;
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 20px 60px #18212f33;
+}
+.access-dialog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+}
+.access-dialog-heading h2 {
+  margin: 7px 0 20px;
+  overflow-wrap: anywhere;
+}
+.access-members {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+.access-members li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 12px 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.access-members li strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.access-members select {
+  width: auto;
+}
+.access-role {
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: #eef2f6;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+.access-dialog button.access-danger {
+  color: #9f1239;
+}
+.access-create {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+.access-create .access-inline input {
+  flex: 1;
+  min-width: 180px;
+}
+.access-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (max-width: 640px) {
+  .access-screen {
+    padding: 24px 16px;
+  }
+  .access-card {
+    padding: 24px;
+  }
+  .access-card h1 {
+    font-size: 26px;
+  }
+  .access-toolbar {
+    padding: 14px 16px;
+    gap: 14px;
+  }
+  .access-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .access-toolbar-actions button {
+    flex: 1 1 auto;
+  }
+  .access-workspace-select {
+    width: 100%;
+  }
+  .access-workspace-select select {
+    flex: 1;
+    max-width: none;
+  }
+  .access-dialog {
+    padding: 20px;
+  }
+  .access-create .access-inline button {
+    flex: 1 1 auto;
+  }
+}

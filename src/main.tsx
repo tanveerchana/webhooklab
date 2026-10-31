@@ -1,1353 +1,1085 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
   ArrowDownToLine,
-  ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
-  Bell,
   BookOpen,
   Braces,
-  Check,
-  CheckCheck,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
-  CircleDot,
   Clock3,
-  Code2,
   Copy,
-  ExternalLink,
-  FlaskConical,
   Github,
   LayoutDashboard,
   LoaderCircle,
-  MoreHorizontal,
-  Play,
   Plus,
-  Radio,
   RefreshCw,
   RotateCcw,
   Search,
   Send,
   Settings2,
   ShieldCheck,
-  SlidersHorizontal,
-  Terminal,
   Webhook,
   X,
   XCircle,
-  Zap,
 } from 'lucide-react';
-import {
-  seedWorkspace,
-  reduceWorkspace,
-  filterEvents,
-  captureEvent,
-  type Workspace,
-  type WebhookEvent,
-  type Scenario,
-} from './domain';
-import './styles.css';
+import { filterEvents, type Workspace, type Scenario, type WebhookEvent } from './domain';
 import { getWorkspaceToken } from './token';
-import { recentEventSeries } from './metrics';
-const getToken = () => getWorkspaceToken(localStorage);
-const statusLabel: Record<string, string> = {
-  delivered: 'Delivered',
-  failed: 'Failed',
-  rejected: 'Rejected',
-};
-function Status({ value }: { value: string }) {
+import { AccessRoot } from './access/AccessRoot';
+import { currentAccess, can, withWorkspaceAccess, handleAccessResponse } from './access/access';
+import './styles.css';
+
+type Page = 'Event stream' | 'Overview' | 'Endpoints' | 'Replay history' | 'Settings';
+const names = { delivered: 'Delivered', failed: 'Failed', rejected: 'Rejected' };
+function time(value: string) {
+  return new Date(value).toLocaleTimeString('en-GB', { timeZone: 'UTC' });
+}
+function Status({ value }: { value: keyof typeof names }) {
   return (
-    <span className={'status ' + value}>
+    <span className={`status ${value}`}>
       <span />
-      {statusLabel[value] || value}
+      {names[value]}
     </span>
   );
 }
-function formatTime(time: string) {
-  return new Date(time).toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZone: 'UTC',
-  });
-}
-function Spark({
-  values,
-  label,
-  color = 'var(--mint)',
-}: {
-  values: number[];
-  label: string;
-  color?: string;
-}) {
-  if (!values.length) return null;
-  const max = Math.max(1, ...values);
-  const points = values.map(
-    (value, i) =>
-      `${values.length === 1 ? 60 : (i * 120) / (values.length - 1)},${36 - (value / max) * 30}`,
-  );
-  const title = `${label} · recent retained events, oldest to newest: ${values.map((v) => Math.round(v * 10) / 10).join(', ')}`;
-  return (
-    <svg viewBox="0 0 120 40" className="spark" role="img" aria-label={title}>
-      <title>{title}</title>
-      <path d={`M 0 40 L ${points.join(' L ')} L 120 40 Z`} fill={color} opacity=".07" />
-      {values.length === 1 ? (
-        <circle cx="60" cy={36 - (values[0] / max) * 30} r="2" fill={color} />
-      ) : (
-        <polyline points={points.join(' ')} fill="none" stroke={color} strokeWidth="1.8" />
-      )}
-    </svg>
-  );
-}
 function JsonView({ value }: { value: unknown }) {
-  const text = JSON.stringify(value, null, 2);
   return (
-    <div className="code-lines">
-      {text.split('\n').map((line, i) => (
-        <div className="code-line" key={i}>
-          <span className="line-no">{i + 1}</span>
-          <code>
-            {line
-              .split(/("(?:[^"\\]|\\.)*"|\b\d+(?:\.\d+)?\b|\btrue\b|\bfalse\b|\bnull\b)/g)
-              .map((token, j) => (
-                <span
-                  key={j}
-                  className={
-                    token.startsWith('"')
-                      ? line
-                          .slice(line.indexOf(token) + token.length)
-                          .trimStart()
-                          .startsWith(':')
-                        ? 'json-key'
-                        : 'json-string'
-                      : /^\d/.test(token)
-                        ? 'json-number'
-                        : ''
-                  }
-                >
-                  {token}
-                </span>
-              ))}
-          </code>
-        </div>
-      ))}
-    </div>
+    <pre className="json-view">
+      <code>{JSON.stringify(value, null, 2)}</code>
+    </pre>
   );
+}
+/** Account sessions use HttpOnly cookies; only explicit demo mode creates a browser capability. */
+async function workspaceFetch(path: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set('Content-Type', 'application/json');
+  if (currentAccess().mode === 'demo')
+    headers.set('Authorization', `Bearer ${getWorkspaceToken(localStorage)}`);
+  return handleAccessResponse(await fetch(path, withWorkspaceAccess({ ...init, headers })));
 }
 function App() {
-  const [token, setToken] = useState(getToken);
-  const [workspaceToken, setWorkspaceToken] = useState('');
+  const access = currentAccess();
+  const isDemo = access.mode === 'demo';
   const [state, setState] = useState<Workspace | null>(null);
-  const [mode, setMode] = useState<'cloud' | 'local'>('cloud');
   const [revision, setRevision] = useState(0);
-  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loaded, setLoaded] = useState(false);
-  const [nav, setNav] = useState('Event stream');
+  const [page, setPage] = useState<Page>('Event stream');
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [status, setStatus] = useState('all');
   const [selected, setSelected] = useState('');
   const [tab, setTab] = useState('Payload');
   const [modal, setModal] = useState<'sample' | 'setup' | 'reset' | null>(null);
-  const [scenario, setScenario] = useState<Scenario>('recover');
   const [raw, setRaw] = useState(
     JSON.stringify(
       {
         type: 'invoice.payment_failed',
-        data: {
-          object: { id: 'in_sandbox_1204', amount: 4900, currency: 'usd', customer: 'cus_sandbox' },
-        },
+        data: { object: { id: 'in_sandbox_1204', amount: 4900, currency: 'usd' } },
       },
       null,
       2,
     ),
   );
+  const [scenario, setScenario] = useState<Scenario>('recover');
   const [invalid, setInvalid] = useState(false);
-  const [toast, setToast] = useState('');
   const [showSecret, setShowSecret] = useState(false);
-  function requestHeaders() {
-    const current = getToken();
-    setToken(current);
-    return { 'Content-Type': 'application/json', Authorization: `Bearer ${current}` };
-  }
+  const [demoToken, setDemoToken] = useState('');
+  const [integrationKey, setIntegrationKey] = useState('');
+  const [integrationConfigured, setIntegrationConfigured] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const endpoint = `${location.origin}/api/ingest`;
+  const mayCapture = can('sample');
+  const mayReadSecret = isDemo || can('secret');
+  const modalAllowed =
+    modal === 'setup' ? mayReadSecret : modal === 'sample' ? mayCapture : can('reset');
   async function read() {
     setBusy(true);
     setError('');
     try {
-      const currentHeaders = requestHeaders();
-      const r = await fetch('/api/workspace', { headers: currentHeaders });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Cloud workspace unavailable.');
-      setWorkspaceToken(currentHeaders.Authorization.slice(7));
+      const response = await workspaceFetch('/api/workspace');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Workspace could not be loaded.');
       setState(data.state);
       setRevision(data.revision);
-      setMode('cloud');
+      setIntegrationConfigured(data.workspace?.ingestionConfigured === true);
+      if (isDemo) setDemoToken(getWorkspaceToken(localStorage));
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Cloud workspace unavailable.');
+      setError(e instanceof Error ? e.message : 'Workspace could not be loaded.');
       return false;
     } finally {
-      setBusy(false);
       setLoaded(true);
+      setBusy(false);
     }
   }
   useEffect(() => {
     void read();
   }, []);
   useEffect(() => {
-    const refreshExpired = () => {
-      if (mode === 'cloud' && getToken() !== token) void read();
+    if (!isDemo) return;
+    const check = () => {
+      if (demoToken && getWorkspaceToken(localStorage) !== demoToken) void read();
     };
-    const timer = setInterval(refreshExpired, 60000);
-    window.addEventListener('focus', refreshExpired);
-    document.addEventListener('visibilitychange', refreshExpired);
+    const interval = setInterval(check, 60000);
+    window.addEventListener('focus', check);
     return () => {
-      clearInterval(timer);
-      window.removeEventListener('focus', refreshExpired);
-      document.removeEventListener('visibilitychange', refreshExpired);
+      clearInterval(interval);
+      window.removeEventListener('focus', check);
     };
-  }, [token, mode]);
-  async function currentCredentials() {
-    const current = getToken();
-    if (current === workspaceToken || mode === 'local')
-      return { token: current, secret: state?.secret };
-    setToken(current);
-    const r = await fetch('/api/workspace', { headers: requestHeaders() });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Workspace refresh failed.');
-    setState(data.state);
-    setRevision(data.revision);
-    setMode('cloud');
-    setWorkspaceToken(current);
-    return { token: current, secret: (data.state as Workspace).secret };
-  }
-  async function copyToken() {
-    try {
-      const credentials = await currentCredentials();
-      await copy(credentials.token, 'Workspace token copied');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Workspace refresh failed.');
-    }
-  }
-  async function copyExample() {
-    try {
-      const credentials = await currentCredentials();
-      await copy(
-        `import { createHmac } from 'node:crypto';\nconst body = JSON.stringify({ type: 'order.created' });\nconst signature = createHmac('sha256', '${credentials.secret}').update(body).digest('hex');\nconst response = await fetch('${location.origin}/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ${credentials.token}', 'X-Webhook-Signature': 'sha256=' + signature }, body });\nconsole.log(await response.json());`,
-        'Complete runnable example copied',
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Workspace refresh failed.');
-    }
-  }
+  }, [demoToken, isDemo]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (e.key === 'Escape') setModal(null);
-      if (e.key === '/' && !modal && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) {
-        e.preventDefault();
-        document.querySelector<HTMLInputElement>('[aria-label="Search events"]')?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setModal(null);
+      const tag = (event.target as HTMLElement)?.tagName;
+      if (event.key === '/' && !modal && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) {
+        event.preventDefault();
+        searchRef.current?.focus();
       }
-      if (e.key === 'Tab' && modal) {
+      if (event.key === 'Tab' && modal) {
         const nodes = Array.from(
           document.querySelectorAll<HTMLElement>(
-            '[role="dialog"] button:not([disabled]), [role="dialog"] input, [role="dialog"] select, [role="dialog"] textarea',
+            '[role="dialog"] button:not([disabled]), [role="dialog"] input, [role="dialog"] textarea, [role="dialog"] select',
           ),
         );
-        const first = nodes[0],
-          last = nodes.at(-1);
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last?.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first?.focus();
+        if (event.shiftKey && document.activeElement === nodes[0]) {
+          event.preventDefault();
+          nodes.at(-1)?.focus();
+        } else if (!event.shiftKey && document.activeElement === nodes.at(-1)) {
+          event.preventDefault();
+          nodes[0]?.focus();
         }
       }
     };
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', keydown);
     if (modal) document.querySelector<HTMLButtonElement>('.modal-close')?.focus();
-    return () => document.removeEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', keydown);
   }, [modal]);
   useEffect(() => {
-    if (toast) {
-      const timer = setTimeout(() => setToast(''), 3500);
+    if (notice) {
+      const timer = setTimeout(() => setNotice(''), 4500);
       return () => clearTimeout(timer);
     }
-  }, [toast]);
-  function accept(next: Workspace) {
-    setState(next);
-    if (!selected) setSelected(next.events[0]?.id || '');
-  }
+  }, [notice]);
   async function command(command: Record<string, unknown>) {
-    if (!state) return;
-    if (mode === 'cloud' && getToken() !== workspaceToken) {
+    if (!can(String(command.type))) {
+      setError('Your role does not allow this action.');
+      return false;
+    }
+    if (isDemo && getWorkspaceToken(localStorage) !== demoToken) {
       if (await read())
-        setError('Workspace capability rotated. Select an event in the refreshed workspace.');
+        setNotice('Demo session renewed. Select an event from the refreshed workspace.');
       return false;
     }
     setBusy(true);
     setError('');
     try {
-      if (mode === 'local') {
-        accept(reduceWorkspace(state, command));
-      } else {
-        const r = await fetch('/api/workspace', {
-          method: 'POST',
-          headers: requestHeaders(),
-          body: JSON.stringify({ command }),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'Workspace update failed.');
-        accept(data.state);
-        setRevision(data.revision);
-        setWorkspaceToken(getToken());
-      }
+      const response = await workspaceFetch('/api/workspace', {
+        method: 'POST',
+        body: JSON.stringify({ command }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'The change could not be saved.');
+      setState(data.state);
+      setRevision(data.revision);
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Update failed.');
+      setError(e instanceof Error ? e.message : 'The change could not be saved.');
       return false;
     } finally {
       setBusy(false);
     }
   }
-  async function sample() {
-    if (!state) return;
+  async function sendSample() {
+    if (!mayCapture) return;
     setBusy(true);
     setError('');
     try {
-      if (mode === 'local') {
-        accept(captureEvent(state, raw, !invalid, scenario, 'Sample'));
-      } else {
-        const r = await fetch('/api/sample', {
-          method: 'POST',
-          headers: requestHeaders(),
-          body: JSON.stringify({ raw, scenario, invalidSignature: invalid }),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'Sample delivery failed.');
-        accept(data.state);
-        setRevision(data.revision);
-        setWorkspaceToken(getToken());
-      }
+      const response = await workspaceFetch('/api/sample', {
+        method: 'POST',
+        body: JSON.stringify({ raw, scenario, invalidSignature: invalid }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Sample event was not saved.');
+      setState(data.state);
+      setRevision(data.revision);
       setSelected('');
-      setFilter('all');
+      setStatus('all');
       setQuery('');
       setModal(null);
-      setToast('Sample captured. Inspect its payload and delivery result.');
+      setNotice('Sample event captured.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sample failed.');
+      setError(e instanceof Error ? e.message : 'Sample event was not saved.');
     } finally {
       setBusy(false);
     }
   }
-  async function copy(value: string, label = 'Copied to clipboard') {
+  async function copy(value: string, message = 'Copied to clipboard.') {
     try {
       await navigator.clipboard.writeText(value);
-      setToast(label);
+      setNotice(message);
     } catch {
       setError('Clipboard unavailable. Select and copy the displayed value.');
     }
   }
-  function download() {
+  function exportEvents() {
     if (!state) return;
-    const blob = new Blob([JSON.stringify(state.events, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'webhooklab-events.json';
-    a.click();
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(state.events, null, 2)], { type: 'application/json' }),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'webhooklab-events.json';
+    link.click();
     URL.revokeObjectURL(url);
-    setToast('Event export downloaded.');
+    setNotice('Events exported as JSON.');
+  }
+  async function integrationAction(action: 'rotate' | 'revoke') {
+    if (!can('integration-key')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await workspaceFetch('/api/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ action, workspaceId: access.workspaceId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Integration key could not be changed.');
+      setIntegrationConfigured(data.configured === true);
+      setIntegrationKey(data.integrationKey || '');
+      setNotice(
+        action === 'rotate'
+          ? 'New integration key created. The previous key is no longer valid.'
+          : 'Integration key revoked.',
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Integration key could not be changed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  function keyControls() {
+    if (isDemo) return null;
+    return (
+      <div className="integration-controls">
+        <h3>External integration key</h3>
+        <p>
+          {integrationConfigured
+            ? 'An integration key is configured.'
+            : 'No integration key is configured.'}{' '}
+          It can capture events only; it cannot read the dashboard.
+        </p>
+        {can('integration-key') ? (
+          <>
+            <div className="integration-actions">
+              <button
+                className="button secondary"
+                disabled={busy}
+                onClick={() => void integrationAction('rotate')}
+              >
+                {integrationConfigured ? 'Rotate integration key' : 'Create integration key'}
+              </button>
+              {integrationConfigured && (
+                <button
+                  className="button danger"
+                  disabled={busy}
+                  onClick={() => void integrationAction('revoke')}
+                >
+                  Revoke key
+                </button>
+              )}
+            </div>
+            <p className="field-help">
+              Rotation immediately revokes the previous key. A new key is shown only in this page’s
+              memory; copy it before leaving.
+            </p>
+          </>
+        ) : (
+          <p className="field-help">
+            Only a workspace owner can create, rotate, or revoke the integration key.
+          </p>
+        )}
+        {integrationKey && can('integration-key') && (
+          <div className="copy-field">
+            <code>{integrationKey}</code>
+            <button
+              className="icon-button"
+              aria-label="Copy integration key"
+              onClick={() => void copy(integrationKey)}
+            >
+              <Copy size={18} />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+  async function copyExample() {
+    if (!mayReadSecret || !state) return;
+    let secret = state.secret;
+    let token = integrationKey;
+    if (isDemo) {
+      const current = getWorkspaceToken(localStorage);
+      token = current;
+      if (current !== demoToken) {
+        const response = await workspaceFetch('/api/workspace');
+        const data = await response.json();
+        if (!response.ok) {
+          setError(data.error || 'Workspace could not be refreshed.');
+          return;
+        }
+        secret = data.state.secret;
+        setState(data.state);
+        setRevision(data.revision);
+        setDemoToken(current);
+      }
+    }
+    if (!token || (!isDemo && !/^whk_ingest_[a-f0-9]{64}$/.test(token))) {
+      setError('Enter a valid integration key before copying the request example.');
+      return;
+    }
+    await copy(
+      `import { createHmac } from 'node:crypto';\nconst body = JSON.stringify({ type: 'order.created' });\nconst signature = createHmac('sha256', '${secret}').update(body).digest('hex');\nconst response = await fetch('${endpoint}', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ${token}', ${!isDemo ? `'X-Workspace-Id': '${access.workspaceId}', ` : ''}'X-Webhook-Signature': 'sha256=' + signature }, body });\nconsole.log(await response.json());`,
+      'Runnable Node.js example copied.',
+    );
   }
   const events = useMemo(
-    () => (state ? filterEvents(state.events, filter, query) : []),
-    [state, filter, query],
+    () => filterEvents(state?.events || [], status, query),
+    [state, status, query],
   );
-  const event = state?.events.find((e) => e.id === selected) || events[0] || state?.events[0];
-  const counts = {
-    delivered: state?.events.filter((e) => e.status === 'delivered').length || 0,
-    failed: state?.events.filter((e) => e.status === 'failed').length || 0,
-    rejected: state?.events.filter((e) => e.status === 'rejected').length || 0,
-  };
-  const endpoint = `${location.origin}/api/ingest`;
-  const latest = event?.attempts.at(-1);
+  const event = state?.events.find((row) => row.id === selected) || events[0] || state?.events[0];
+  const total = state?.events.length || 0;
+  const delivered = state?.events.filter((row) => row.status === 'delivered').length || 0;
+  const failed = state?.events.filter((row) => row.status === 'failed').length || 0;
+  const rejected = state?.events.filter((row) => row.status === 'rejected').length || 0;
+  const attempts = state?.events.flatMap((row) => row.attempts) || [];
+  const latency = attempts.length
+    ? Math.round(attempts.reduce((sum, attempt) => sum + attempt.duration, 0) / attempts.length)
+    : 0;
+  const replayRows =
+    state?.events
+      .flatMap((row) =>
+        row.attempts
+          .filter((attempt) => attempt.kind === 'replay')
+          .map((attempt) => ({ row, attempt })),
+      )
+      .sort((a, b) => Date.parse(b.attempt.at) - Date.parse(a.attempt.at)) || [];
   const wait =
     event?.nextRetryAt && state
       ? Math.max(0, Math.ceil((Date.parse(event.nextRetryAt) - Date.parse(state.clock)) / 1000))
       : 0;
-  const total = state?.events.length || 0;
-  const trends = useMemo(() => recentEventSeries(state?.events || []), [state]);
-  const successRate = total ? Math.round((counts.delivered / total) * 100) : 0;
-  const avgLatency = state
-    ? Math.round(
-        state.events.flatMap((e) => e.attempts).reduce((s, a) => s + a.duration, 0) /
-          Math.max(1, state.events.flatMap((e) => e.attempts).length),
-      )
-    : 0;
+  function choose(row: WebhookEvent) {
+    setSelected(row.id);
+    setTab('Payload');
+  }
+  const descriptions: Record<Page, string> = {
+    'Event stream': 'Inspect captured requests and investigate delivery results.',
+    Overview: 'Delivery results across your retained events.',
+    Endpoints: 'Configure signed inbound requests for this workspace.',
+    'Replay history': 'Review manual delivery attempts and their results.',
+    Settings: 'Manage signing, simulation time, exports, and workspace data.',
+  };
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <a
           className="brand"
           href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            setNav('Event stream');
+          onClick={(event) => {
+            event.preventDefault();
+            setPage('Event stream');
           }}
         >
-          <span className="brand-mark">
-            <Webhook size={23} />
-          </span>
-          <span>
-            Webhook<span className="brand-light">Lab</span>
-            <span className="brand-dot">.</span>
-          </span>
+          <Webhook size={26} />
+          <span>WebhookLab</span>
         </a>
-        <div className="workspace-switch">
-          <span className="workspace-icon">T</span>
-          <span>
-            <strong>Tanveer’s workspace</strong>
-            <small>Personal sandbox</small>
-          </span>
-          <ChevronDown size={14} />
-        </div>
-        <div className="nav-caption">WORKSPACE</div>
-        <nav>
-          {[
-            { name: 'Overview', icon: LayoutDashboard },
-            { name: 'Event stream', icon: Activity },
-            { name: 'Endpoints', icon: Webhook },
-            { name: 'Replay history', icon: RotateCcw },
-          ].map(({ name, icon: Icon }) => (
+        <p className="workspace-description">{isDemo ? 'Demo workspace' : 'Account workspace'}</p>
+        <nav aria-label="Workspace navigation">
+          {(
+            [
+              { name: 'Overview', icon: LayoutDashboard },
+              { name: 'Event stream', icon: Activity },
+              { name: 'Endpoints', icon: Webhook },
+              { name: 'Replay history', icon: RotateCcw },
+              { name: 'Settings', icon: Settings2 },
+            ] as const
+          ).map(({ name, icon: Icon }) => (
             <button
               key={name}
-              className={'nav-item ' + (nav === name ? 'active' : '')}
-              onClick={() => setNav(name)}
+              className={`nav-item ${page === name ? 'active' : ''}`}
+              onClick={() => setPage(name)}
             >
-              <Icon size={17} />
+              <Icon size={20} />
               <span>{name}</span>
-              {name === 'Event stream' && <span className="nav-count">{total}</span>}
             </button>
           ))}
         </nav>
-        <div className="nav-caption second">DEVELOPER</div>
-        <button
-          className={'nav-item ' + (nav === 'Settings' ? 'active' : '')}
-          onClick={() => setNav('Settings')}
-        >
-          <Settings2 size={17} />
-          Settings
-        </button>
-        <button className="nav-item" onClick={() => setModal('setup')}>
-          <BookOpen size={17} />
-          Quickstart
-          <ArrowUpRight size={13} className="muted" />
-        </button>
         <div className="sidebar-bottom">
-          <div className="sandbox-note">
-            <FlaskConical size={18} />
-            <strong>A safe place to break things.</strong>
-            <p>
-              Real capture. Simulated delivery.
-              <br />
-              Zero production surprises.
-            </p>
-            <span>
-              <span className="tiny-dot" /> SANDBOX ENVIRONMENT
-            </span>
-          </div>
-          <a className="author" href="https://singhtanveer.com" target="_blank" rel="noreferrer">
-            <span className="avatar">TS</span>
-            <span>
-              <strong>Tanveer Singh</strong>
-              <small>Designed & engineered</small>
-            </span>
-            <ArrowUpRight size={14} />
+          <p>
+            Inbound capture is real.
+            <br />
+            Downstream delivery is simulated.
+          </p>
+          <a href="https://github.com/tanveerchana/webhooklab" target="_blank" rel="noreferrer">
+            <Github size={18} />
+            View source
+          </a>
+          <a href="https://singhtanveer.com" target="_blank" rel="noreferrer">
+            Tanveer Singh
           </a>
         </div>
       </aside>
-      <div className="main-shell">
-        <header className="topbar">
-          <div className="breadcrumb">
-            Workspace <ChevronRight size={13} />
-            <span>{nav}</span>
+      <main>
+        <header className="page-heading">
+          <div>
+            <h1>{page}</h1>
+            <p>{descriptions[page]}</p>
           </div>
-          <div className="top-actions">
-            <span className="sandbox-chip">
-              <span />
-              Sandbox
-            </span>
-            <a
-              href="https://github.com/tanveerchana/webhooklab"
-              target="_blank"
-              rel="noreferrer"
-              className="github-link"
-            >
-              <Github size={16} />
-              <span>Source code</span>
-              <ArrowUpRight size={12} />
-            </a>
-            <span className="small-avatar">TS</span>
-          </div>
-        </header>
-        <main>
-          <section className="page-heading">
-            <div>
-              <div className="eyebrow">
-                <span className="tiny-dot" /> YOUR WEBHOOKS, IN FOCUS
-              </div>
-              <h1>{nav}</h1>
-              <p>
-                {nav === 'Event stream'
-                  ? 'Every event, from first request to final delivery.'
-                  : nav === 'Overview'
-                    ? 'A clear picture of your webhook delivery health.'
-                    : nav === 'Endpoints'
-                      ? 'One endpoint. Every event accounted for.'
-                      : nav === 'Replay history'
-                        ? 'A complete trail of every recovery attempt.'
-                        : 'Your sandbox, configured your way.'}
-              </p>
-            </div>
-            <div className="heading-actions">
-              <button className="button secondary" onClick={() => setModal('setup')}>
-                <Code2 size={15} />
+          <div className="heading-actions">
+            {mayReadSecret && (
+              <button
+                className="button secondary"
+                onClick={() => {
+                  setError('');
+                  setModal('setup');
+                }}
+              >
+                <BookOpen size={18} />
                 Connect endpoint
               </button>
+            )}
+            {mayCapture && (
               <button
                 className="button primary"
-                onClick={() => setModal('sample')}
                 disabled={!state || busy}
+                onClick={() => {
+                  setError('');
+                  setModal('sample');
+                }}
               >
-                <Plus size={16} />
-                Send sample event
+                <Plus size={18} />
+                Send sample
               </button>
+            )}
+          </div>
+        </header>
+        {error && (
+          <div className="notice error" role="alert">
+            <XCircle size={20} />
+            <div>
+              <strong>Request could not be completed</strong>
+              <p>{error}</p>
             </div>
-          </section>
-          {error && (
-            <div className="error-banner" role="alert">
-              <XCircle size={17} />
-              <div>
-                <strong>{state ? 'Request failed' : 'Cloud workspace unavailable'}</strong>
-                <span>{error}</span>
-                {!state && loaded && (
-                  <button
-                    onClick={() => {
-                      setState(seedWorkspace());
-                      setMode('local');
-                      setError('');
-                    }}
-                  >
-                    Explore an explicit local demo →
-                  </button>
-                )}
-              </div>
-              <button aria-label="Retry cloud connection" onClick={() => void read()}>
-                <RefreshCw size={16} />
-              </button>
-            </div>
-          )}
-          {mode === 'local' && (
-            <div className="local-banner">
-              <FlaskConical size={16} />
-              <span>
-                <strong>Local demo</strong> · Changes last for this session. External capture
-                requires the cloud API.
-              </span>
-              <button onClick={() => void read()}>
-                Reconnect cloud <ArrowRight size={13} />
-              </button>
-            </div>
-          )}
-          {!state && !loaded ? (
-            <div className="loading">
-              <LoaderCircle className="spin" size={24} />
-              <h2>Opening your workbench</h2>
-              <p>Connecting to your private workspace…</p>
-            </div>
-          ) : state ? (
-            <>
-              <div className="stats-grid">
-                {[
-                  {
-                    label: 'Total events',
-                    value: total,
-                    detail: 'All captured requests',
-                    icon: Webhook,
-                    color: 'var(--mint)',
-                    series: trends.total,
-                    scope: 'Cumulative captured count',
-                  },
-                  {
-                    label: 'Delivery rate',
-                    value: `${successRate}%`,
-                    detail: `${counts.delivered} events delivered`,
-                    icon: CheckCheck,
-                    color: 'var(--mint)',
-                    series: trends.deliveryRate,
-                    scope: 'Running delivery percentage',
-                  },
-                  {
-                    label: 'Failed deliveries',
-                    value: counts.failed,
-                    detail: 'Ready for investigation',
-                    icon: CircleDot,
-                    color: 'var(--amber)',
-                    series: trends.failures,
-                    scope: 'Cumulative failed count',
-                  },
-                  {
-                    label: 'Avg. response',
-                    value: avgLatency,
-                    unit: 'ms',
-                    detail: 'Simulated downstream',
-                    icon: Zap,
-                    color: 'var(--blue)',
-                    series: trends.latency,
-                    scope:
-                      'Latest simulated attempt latency in milliseconds (rejected events excluded)',
-                  },
-                ].map((card) => (
-                  <div className="stat-card" key={card.label}>
-                    <div className="stat-label">
-                      {card.label}
-                      <card.icon size={15} />
-                    </div>
-                    <div className="stat-value">
-                      {card.value}
-                      <span>{card.unit}</span>
-                    </div>
-                    <div className="stat-detail">
-                      <span className="stat-dot" style={{ background: card.color }} />
-                      {card.detail}
-                    </div>
-                    <Spark color={card.color} values={card.series} label={card.scope} />
-                  </div>
-                ))}
-              </div>
-              {nav === 'Event stream' || nav === 'Overview' ? (
-                <>
-                  {nav === 'Overview' && (
-                    <section className="overview-panel">
-                      <div>
-                        <span className="section-kicker">DELIVERY BREAKDOWN</span>
-                        <h2>Your event pipeline, at a glance.</h2>
-                        <p>
-                          Seed events are synthetic. New inbound HTTP requests are captured live.
-                        </p>
-                      </div>
-                      <div className="breakdown">
-                        <div style={{ width: `${successRate}%` }} />
-                        <div style={{ width: `${total ? (counts.failed / total) * 100 : 0}%` }} />
-                        <div style={{ width: `${total ? (counts.rejected / total) * 100 : 0}%` }} />
-                      </div>
-                      <div className="breakdown-labels">
-                        <span>
-                          <i className="green" />
-                          {counts.delivered} delivered
-                        </span>
-                        <span>
-                          <i className="orange" />
-                          {counts.failed} failed
-                        </span>
-                        <span>
-                          <i className="red" />
-                          {counts.rejected} rejected
-                        </span>
-                      </div>
-                    </section>
+            <button className="button secondary" onClick={() => void read()} disabled={busy}>
+              Retry
+            </button>
+          </div>
+        )}
+        <div className="scope-note">
+          <ShieldCheck size={18} />
+          <span>
+            {isDemo
+              ? 'Demo data is separate from account workspaces.'
+              : `${access.role ? access.role[0].toUpperCase() + access.role.slice(1) : 'Workspace'} access.`}{' '}
+            Seed events are synthetic; downstream responses and timing are simulated.
+          </span>
+        </div>
+        {!loaded ? (
+          <div className="empty-state">
+            <LoaderCircle className="spin" size={28} />
+            <h2>Loading workspace</h2>
+          </div>
+        ) : !state ? (
+          <div className="empty-state">
+            <h2>Workspace unavailable</h2>
+            <p>The server did not return saved data. Use Retry to reconnect.</p>
+          </div>
+        ) : (
+          <>
+            <section className="stats-grid" aria-label="Retained event statistics">
+              {[
+                { label: 'Captured events', value: total, detail: 'Current retained requests' },
+                {
+                  label: 'Delivery rate',
+                  value: `${total ? Math.round((delivered / total) * 100) : 0}%`,
+                  detail: `${delivered} delivered events`,
+                },
+                {
+                  label: 'Failed deliveries',
+                  value: failed,
+                  detail: `${rejected} rejected signatures`,
+                },
+                {
+                  label: 'Average response',
+                  value: `${latency} ms`,
+                  detail: 'Simulated attempt latency',
+                },
+              ].map((card) => (
+                <div className="stat-card" key={card.label}>
+                  <p>{card.label}</p>
+                  <strong>{card.value}</strong>
+                  <span>{card.detail}</span>
+                </div>
+              ))}
+            </section>
+            {page === 'Overview' && (
+              <section className="content-card overview">
+                <h2>Delivery breakdown</h2>
+                <p>
+                  Current status of retained requests. Manual replay can change an event’s status.
+                </p>
+                <div
+                  className="breakdown"
+                  aria-label={`${delivered} delivered, ${failed} failed, ${rejected} rejected`}
+                >
+                  {total > 0 && (
+                    <>
+                      <span
+                        className="delivered"
+                        style={{ width: `${(delivered / total) * 100}%` }}
+                      />
+                      <span className="failed" style={{ width: `${(failed / total) * 100}%` }} />
+                      <span
+                        className="rejected"
+                        style={{ width: `${(rejected / total) * 100}%` }}
+                      />
+                    </>
                   )}
-                  <div className="workbench">
-                    <section className="event-panel">
-                      <div className="panel-heading">
-                        <div>
-                          <Radio size={16} />
-                          <h2>Incoming events</h2>
-                          <span className="number-badge">{total}</span>
-                        </div>
-                        <span className="live-label">
-                          <span className="tiny-dot" />
-                          {mode === 'cloud' ? 'Cloud workspace' : 'Local session'}
-                        </span>
-                      </div>
-                      <div className="table-tools">
-                        <label className="search-box">
-                          <Search size={15} />
-                          <input
-                            aria-label="Search events"
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Search events, IDs, or payloads…"
-                          />
-                          <kbd>/</kbd>
-                        </label>
-                        <button
-                          className="icon-button"
-                          aria-label="Refresh events"
-                          onClick={() =>
-                            mode === 'cloud'
-                              ? void read()
-                              : setToast('Local session is up to date.')
-                          }
-                          disabled={busy}
-                        >
-                          <RefreshCw size={15} className={busy ? 'spin' : ''} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          aria-label="Export events as JSON"
-                          onClick={download}
-                        >
-                          <ArrowDownToLine size={15} />
-                        </button>
-                      </div>
-                      <div className="filter-tabs">
-                        {[
-                          ['all', 'All events', total],
-                          ['delivered', 'Delivered', counts.delivered],
-                          ['failed', 'Failed', counts.failed],
-                          ['rejected', 'Rejected', counts.rejected],
-                        ].map(([key, label, n]) => (
-                          <button
-                            key={key}
-                            className={filter === key ? 'selected' : ''}
-                            onClick={() => setFilter(String(key))}
-                          >
-                            {label}
-                            <span>{n}</span>
-                          </button>
+                </div>
+                <div className="breakdown-legend">
+                  <Status value="delivered" />
+                  <span>{delivered}</span>
+                  <Status value="failed" />
+                  <span>{failed}</span>
+                  <Status value="rejected" />
+                  <span>{rejected}</span>
+                </div>
+              </section>
+            )}
+            {(page === 'Event stream' || page === 'Overview') && (
+              <div className="workbench">
+                <section className="event-panel">
+                  <div className="panel-heading">
+                    <h2>
+                      Incoming events <span className="count">{total}</span>
+                    </h2>
+                    <div className="table-actions">
+                      <button
+                        className="icon-button"
+                        onClick={() => void read()}
+                        disabled={busy}
+                        aria-label="Refresh events"
+                      >
+                        <RefreshCw size={18} className={busy ? 'spin' : ''} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        onClick={exportEvents}
+                        aria-label="Export events as JSON"
+                      >
+                        <ArrowDownToLine size={18} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="table-tools">
+                    <label className="search-box">
+                      <Search size={20} />
+                      <input
+                        ref={searchRef}
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Search events or payloads"
+                        aria-label="Search events"
+                      />
+                    </label>
+                    <label className="status-select">
+                      <span>Status</span>
+                      <select value={status} onChange={(event) => setStatus(event.target.value)}>
+                        <option value="all">All events</option>
+                        <option value="delivered">Delivered</option>
+                        <option value="failed">Failed</option>
+                        <option value="rejected">Rejected</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="event-table-wrap">
+                    <table className="event-table">
+                      <thead>
+                        <tr>
+                          <th>Event</th>
+                          <th>Status</th>
+                          <th>Received · UTC</th>
+                          <th>Response</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {events.map((row) => (
+                          <tr key={row.id} className={event?.id === row.id ? 'selected-row' : ''}>
+                            <td>
+                              <button className="event-select" onClick={() => choose(row)}>
+                                <strong>{row.type}</strong>
+                                <span>{row.id}</span>
+                              </button>
+                              <span className="source-label">{row.source}</span>
+                            </td>
+                            <td>
+                              <Status value={row.status} />
+                            </td>
+                            <td className="mono">{time(row.receivedAt)}</td>
+                            <td className="mono">{row.attempts.at(-1)?.code || '—'}</td>
+                          </tr>
                         ))}
+                      </tbody>
+                    </table>
+                    {!events.length && (
+                      <div className="empty-state">
+                        <Search size={28} />
+                        <h3>No matching events</h3>
+                        <p>Change your search or status filter.</p>
+                        <button
+                          className="button secondary"
+                          onClick={() => {
+                            setQuery('');
+                            setStatus('all');
+                          }}
+                        >
+                          Clear filters
+                        </button>
                       </div>
-                      <div className="event-table-wrap">
-                        <table className="event-table">
-                          <thead>
-                            <tr>
-                              <th>EVENT</th>
-                              <th>STATUS</th>
-                              <th>RECEIVED</th>
-                              <th />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {events.map((e) => (
-                              <tr
-                                key={e.id}
-                                className={event?.id === e.id ? 'selected-row' : ''}
-                                onClick={() => {
-                                  setSelected(e.id);
-                                  setTab('Payload');
-                                }}
-                              >
-                                <td>
-                                  <button
-                                    className="event-select"
-                                    onClick={(ev) => {
-                                      ev.stopPropagation();
-                                      setSelected(e.id);
-                                      setTab('Payload');
-                                    }}
-                                  >
-                                    <span className={'event-icon ' + e.status}>
-                                      {e.status === 'delivered' ? (
-                                        <ArrowDownToLine size={15} />
-                                      ) : e.status === 'failed' ? (
-                                        <RotateCcw size={15} />
-                                      ) : (
-                                        <ShieldCheck size={15} />
-                                      )}
-                                    </span>
-                                    <span>
-                                      <strong>{e.type}</strong>
-                                      <small>
-                                        {e.id.slice(0, 16)} <span>· {e.source}</span>
-                                      </small>
-                                    </span>
-                                  </button>
-                                </td>
-                                <td>
-                                  <Status value={e.status} />
-                                </td>
-                                <td className="time-cell">
-                                  {formatTime(e.receivedAt)}
-                                  <small>
-                                    {e.attempts.at(-1)?.code || '—'}{' '}
-                                    <span>· {e.attempts.at(-1)?.duration || 0} ms</span>
-                                  </small>
-                                </td>
-                                <td>
-                                  <ChevronRight size={13} />
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        {events.length === 0 && (
-                          <div className="empty-state">
-                            <Search size={25} />
-                            <h3>No matching events</h3>
-                            <p>Try a different search or status filter.</p>
-                            <button
-                              onClick={() => {
-                                setFilter('all');
-                                setQuery('');
-                              }}
-                            >
-                              Clear filters
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <div className="table-footer">
-                        <span>
-                          Showing {events.length} of {total} events
-                        </span>
-                        <span>
-                          Latest first <ArrowDownToLine size={12} />
-                        </span>
-                      </div>
-                    </section>
-                    {event && (
-                      <aside className="inspector">
-                        <div className="inspector-heading">
-                          <span>
-                            <Braces size={16} />
-                            Event inspector
-                          </span>
-                          <button
-                            className="icon-button"
-                            onClick={() => copy(event.id, 'Event ID copied')}
-                            aria-label="Copy event ID"
-                          >
-                            <Copy size={14} />
-                          </button>
-                        </div>
-                        <div className="event-summary">
-                          <div className="summary-top">
-                            <span className="section-kicker">
-                              {event.source.toUpperCase()} EVENT
-                            </span>
-                            <Status value={event.status} />
-                          </div>
-                          <h2>{event.type}</h2>
-                          <div className="event-id">
-                            {event.id}
-                            <button aria-label="Copy full event ID" onClick={() => copy(event.id)}>
-                              <Copy size={12} />
-                            </button>
-                          </div>
-                          <div className="event-meta">
-                            <div>
-                              <span>Response</span>
-                              <strong className={latest?.code === 200 ? 'mint-text' : 'amber-text'}>
-                                {latest
-                                  ? `${latest.code} ${latest.code === 200 ? 'OK' : 'Service Unavailable'}`
-                                  : 'Signature rejected'}
-                              </strong>
-                            </div>
-                            <div>
-                              <span>Received at</span>
-                              <strong>{formatTime(event.receivedAt)} UTC</strong>
-                            </div>
-                            <div>
-                              <span>Delivery time</span>
-                              <strong>{latest?.duration || 0} ms</strong>
-                            </div>
-                            <div>
-                              <span>Signature</span>
-                              <strong className={event.signatureValid ? 'mint-text' : 'red-text'}>
-                                {event.signatureValid ? (
-                                  <ShieldCheck size={12} />
-                                ) : (
-                                  <XCircle size={12} />
-                                )}{' '}
-                                {event.signatureValid ? 'Verified' : 'Invalid'}
-                              </strong>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="inspector-tabs">
-                          {['Payload', 'Headers', 'Attempts'].map((t) => (
-                            <button
-                              key={t}
-                              className={tab === t ? 'selected' : ''}
-                              onClick={() => setTab(t)}
-                            >
-                              {t}
-                              {t === 'Attempts' && <span>{event.attempts.length}</span>}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="inspector-content">
-                          {tab === 'Payload' ? (
-                            <>
-                              <div className="code-toolbar">
-                                <span>
-                                  <span className="json-dot" /> application/json
-                                </span>
-                                <button
-                                  onClick={() =>
-                                    copy(JSON.stringify(event.payload, null, 2), 'Payload copied')
-                                  }
-                                  aria-label="Copy payload"
-                                >
-                                  <Copy size={13} />
-                                </button>
-                              </div>
-                              <JsonView value={event.payload} />
-                            </>
-                          ) : tab === 'Headers' ? (
-                            <div className="headers-view">
-                              <p>
-                                Capture metadata. Sensitive authorization values are never
-                                displayed.
-                              </p>
-                              {[
-                                ['Content-Type', 'application/json'],
-                                ['X-Webhook-Event', event.type],
-                                ['Signature scheme', 'HMAC-SHA256'],
-                                [
-                                  'Verification',
-                                  event.signatureValid ? 'Valid signature' : 'Invalid signature',
-                                ],
-                                ['Downstream', 'Simulated · no outbound HTTP'],
-                                ['Scenario', event.scenario],
-                              ].map(([k, v]) => (
-                                <div key={k}>
-                                  <span>{k}</span>
-                                  <code>{v}</code>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="attempts-view">
-                              <p>Delivery runs against a deterministic local simulator.</p>
-                              {event.attempts.length ? (
-                                event.attempts
-                                  .slice()
-                                  .reverse()
-                                  .map((a) => (
-                                    <div className="attempt" key={a.number}>
-                                      <span
-                                        className={
-                                          a.code === 200 ? 'attempt-dot success' : 'attempt-dot'
-                                        }
-                                      />
-                                      <div>
-                                        <strong>
-                                          Attempt {a.number}
-                                          <span>
-                                            {a.kind === 'replay'
-                                              ? 'Manual replay'
-                                              : 'Initial delivery'}
-                                          </span>
-                                        </strong>
-                                        <p>{a.reason}</p>
-                                        <small>
-                                          {formatTime(a.at)} · {a.duration} ms
-                                        </small>
-                                      </div>
-                                      <code className={a.code === 200 ? 'mint-text' : 'amber-text'}>
-                                        {a.code}
-                                      </code>
-                                    </div>
-                                  ))
-                              ) : (
-                                <div className="no-attempts">
-                                  <ShieldCheck size={24} />
-                                  <h3>Rejected before delivery</h3>
-                                  <p>
-                                    Signature verification failed. The downstream was never called.
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <div className="inspector-bottom">
-                          <div className="simulation-label">
-                            <FlaskConical size={13} />
-                            Simulated downstream ·{' '}
-                            {event.scenario === 'recover'
-                              ? 'recovers on retry'
-                              : event.scenario === 'always-fail'
-                                ? 'always returns 503'
-                                : 'returns 200'}
-                          </div>
-                          {wait > 0 && event.status === 'failed' && (
-                            <p className="backoff-note">
-                              Backoff: {wait}s remaining on the simulation clock.
-                            </p>
-                          )}
-                          <button
-                            className="button primary replay-button"
-                            disabled={
-                              busy || event.status !== 'failed' || event.attempts.length >= 20
-                            }
-                            onClick={async () => {
-                              if (wait > 0) {
-                                const ok = await command({
-                                  type: 'advance-clock',
-                                  seconds: Math.min(3600, wait),
-                                });
-                                if (ok)
-                                  setToast('Simulation clock advanced. Replay is now available.');
-                              } else {
-                                const ok = await command({ type: 'replay', id: event.id });
-                                if (ok) {
-                                  setTab('Attempts');
-                                  setToast('Replay completed. Delivery history updated.');
-                                }
-                              }
-                            }}
-                          >
-                            <RotateCcw size={15} />
-                            {event.status === 'delivered'
-                              ? 'Successfully delivered'
-                              : event.status === 'rejected'
-                                ? 'Signature verification failed'
-                                : event.attempts.length >= 20
-                                  ? 'Replay limit reached'
-                                  : wait > 0
-                                    ? `Advance clock ${wait}s`
-                                    : 'Replay event'}
-                            {event.status === 'failed' && <ArrowRight size={15} />}
-                          </button>
-                        </div>
-                      </aside>
                     )}
                   </div>
-                </>
-              ) : nav === 'Endpoints' ? (
-                <section className="content-card endpoint-page">
-                  <div className="endpoint-card-icon">
-                    <Webhook size={26} />
+                  <div className="table-footer">
+                    Showing {events.length} of {total} retained events · latest first
                   </div>
-                  <div className="section-kicker">INBOUND ENDPOINT</div>
-                  <h2>Your front door for webhooks.</h2>
-                  <p>
-                    Send a signed JSON request to capture it in this workspace. Inbound HTTP is
-                    real; downstream delivery is simulated.
-                  </p>
-                  <div className="endpoint-url">
-                    <span>POST</span>
-                    <code>{endpoint}</code>
-                    <button onClick={() => copy(endpoint)} aria-label="Copy endpoint">
-                      <Copy size={16} />
-                    </button>
-                  </div>
-                  <div className="endpoint-details">
-                    <div>
-                      <span>Authentication</span>
-                      <strong>Bearer workspace token</strong>
-                    </div>
-                    <div>
-                      <span>Verification</span>
-                      <strong>HMAC-SHA256 · exact request bytes</strong>
-                    </div>
-                    <div>
-                      <span>Payload limit</span>
-                      <strong>64 KB · valid JSON</strong>
-                    </div>
-                    <div>
-                      <span>Retention</span>
-                      <strong>Latest 150 events / workspace</strong>
-                    </div>
-                  </div>
-                  <button className="button primary" onClick={() => setModal('setup')}>
-                    <Terminal size={15} />
-                    View integration quickstart
-                    <ArrowRight size={15} />
-                  </button>
                 </section>
-              ) : nav === 'Replay history' ? (
-                <section className="content-card">
-                  <div className="panel-heading">
-                    <div>
-                      <RotateCcw size={16} />
-                      <h2>Replay history</h2>
-                    </div>
-                    <span className="subtle">Manual attempts · simulation clock</span>
-                  </div>
-                  {state.events
-                    .flatMap((e) =>
-                      e.attempts.filter((a) => a.kind === 'replay').map((a) => ({ e, a })),
-                    )
-                    .sort((a, b) => Date.parse(b.a.at) - Date.parse(a.a.at))
-                    .map(({ e, a }) => (
+                {event && (
+                  <aside className="inspector" aria-label="Selected event inspector">
+                    <div className="panel-heading">
+                      <h2>
+                        <Braces size={20} />
+                        Event inspector
+                      </h2>
                       <button
+                        className="icon-button"
+                        aria-label="Copy event ID"
+                        onClick={() => void copy(event.id)}
+                      >
+                        <Copy size={18} />
+                      </button>
+                    </div>
+                    <div className="event-summary">
+                      <Status value={event.status} />
+                      <h2>{event.type}</h2>
+                      <p className="event-id">{event.id}</p>
+                      <dl className="event-meta">
+                        <div>
+                          <dt>Received</dt>
+                          <dd>{time(event.receivedAt)} UTC</dd>
+                        </div>
+                        <div>
+                          <dt>Response</dt>
+                          <dd>{event.attempts.at(-1)?.code || 'No delivery'}</dd>
+                        </div>
+                        <div>
+                          <dt>Signature</dt>
+                          <dd>{event.signatureValid ? 'Verified' : 'Invalid'}</dd>
+                        </div>
+                        <div>
+                          <dt>Scenario</dt>
+                          <dd>{event.scenario}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                    <div className="inspector-tabs" role="tablist" aria-label="Event details">
+                      {['Payload', 'Headers', 'Attempts'].map((value) => (
+                        <button
+                          role="tab"
+                          aria-selected={tab === value}
+                          key={value}
+                          className={tab === value ? 'selected' : ''}
+                          onClick={() => setTab(value)}
+                        >
+                          {value}
+                          {value === 'Attempts' && ` (${event.attempts.length})`}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="inspector-content" role="tabpanel">
+                      {tab === 'Payload' ? (
+                        <>
+                          <div className="code-toolbar">
+                            <span>application/json</span>
+                            <button
+                              className="icon-button"
+                              onClick={() => void copy(JSON.stringify(event.payload, null, 2))}
+                              aria-label="Copy payload"
+                            >
+                              <Copy size={16} />
+                            </button>
+                          </div>
+                          <JsonView value={event.payload} />
+                        </>
+                      ) : tab === 'Headers' ? (
+                        <div className="headers-view">
+                          <p>Capture metadata. Authorization credentials are never displayed.</p>
+                          <dl>
+                            {[
+                              ['Content-Type', 'application/json'],
+                              ['Signature scheme', 'HMAC-SHA256'],
+                              [
+                                'Verification',
+                                event.signatureValid ? 'Valid signature' : 'Invalid signature',
+                              ],
+                              ['Downstream', 'Simulated · no outbound HTTP'],
+                            ].map(([label, value]) => (
+                              <div key={label}>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </div>
+                      ) : (
+                        <div className="attempts-view">
+                          {event.attempts.length ? (
+                            event.attempts
+                              .slice()
+                              .reverse()
+                              .map((attempt) => (
+                                <div className="attempt" key={attempt.number}>
+                                  <div>
+                                    <strong>Attempt {attempt.number}</strong>
+                                    <Status value={attempt.code === 200 ? 'delivered' : 'failed'} />
+                                  </div>
+                                  <p>{attempt.reason}</p>
+                                  <span>
+                                    {time(attempt.at)} UTC · {attempt.duration} ms · {attempt.kind}
+                                  </span>
+                                </div>
+                              ))
+                          ) : (
+                            <p>Rejected before delivery because signature verification failed.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="inspector-bottom">
+                      <p>Downstream delivery is simulated.</p>
+                      {event.status === 'failed' && wait > 0 && (
+                        <p>Backoff: {wait}s remaining on the simulation clock.</p>
+                      )}
+                      {can('replay') && (
+                        <button
+                          className="button primary"
+                          disabled={
+                            busy || event.status !== 'failed' || event.attempts.length >= 20
+                          }
+                          onClick={async () => {
+                            if (wait > 0) {
+                              if (
+                                await command({
+                                  type: 'advance-clock',
+                                  seconds: Math.min(3600, wait),
+                                })
+                              )
+                                setNotice('Simulation clock advanced. Replay is ready.');
+                            } else if (await command({ type: 'replay', id: event.id })) {
+                              setTab('Attempts');
+                              setNotice('Replay completed.');
+                            }
+                          }}
+                        >
+                          <RotateCcw size={18} />
+                          {event.status === 'delivered'
+                            ? 'Already delivered'
+                            : event.status === 'rejected'
+                              ? 'Cannot replay rejected event'
+                              : event.attempts.length >= 20
+                                ? 'Attempt limit reached'
+                                : wait > 0
+                                  ? `Advance clock ${wait}s`
+                                  : 'Replay event'}
+                        </button>
+                      )}
+                      {!can('replay') && (
+                        <p className="read-only">
+                          Your role has read-only access to delivery attempts.
+                        </p>
+                      )}
+                    </div>
+                  </aside>
+                )}
+              </div>
+            )}
+            {page === 'Endpoints' && (
+              <section className="content-card endpoint-page">
+                <h2>Inbound endpoint</h2>
+                <p>
+                  Requests are captured over HTTP. The delivery result comes from a deterministic
+                  simulator.
+                </p>
+                <div className="endpoint-url">
+                  <span>POST</span>
+                  <code>{endpoint}</code>
+                  <button
+                    className="icon-button"
+                    onClick={() => void copy(endpoint)}
+                    aria-label="Copy endpoint URL"
+                  >
+                    <Copy size={18} />
+                  </button>
+                </div>
+                <dl className="endpoint-details">
+                  <div>
+                    <dt>Verification</dt>
+                    <dd>HMAC-SHA256 of exact request bytes</dd>
+                  </div>
+                  <div>
+                    <dt>Payload limit</dt>
+                    <dd>64 KB · valid JSON</dd>
+                  </div>
+                  <div>
+                    <dt>Retention</dt>
+                    <dd>Up to 150 events within a 450 KB state budget</dd>
+                  </div>
+                  <div>
+                    <dt>Downstream</dt>
+                    <dd>Simulated only · no external forwarding</dd>
+                  </div>
+                </dl>
+                {keyControls()}
+                {mayReadSecret ? (
+                  <button
+                    className="button primary"
+                    onClick={() => {
+                      setError('');
+                      setModal('setup');
+                    }}
+                  >
+                    <BookOpen size={18} />
+                    Integration instructions
+                  </button>
+                ) : (
+                  <p className="read-only">
+                    An owner or editor can configure inbound integration credentials.
+                  </p>
+                )}
+              </section>
+            )}
+            {page === 'Replay history' && (
+              <section className="content-card">
+                <div className="panel-heading">
+                  <h2>Manual replay attempts</h2>
+                  <span>{replayRows.length} attempts</span>
+                </div>
+                {replayRows.length ? (
+                  <div className="history-list">
+                    {replayRows.map(({ row, attempt }) => (
+                      <button
+                        key={`${row.id}-${attempt.number}`}
                         className="history-row"
-                        key={e.id + a.number}
                         onClick={() => {
-                          setSelected(e.id);
+                          choose(row);
                           setTab('Attempts');
-                          setNav('Event stream');
+                          setPage('Event stream');
                         }}
                       >
-                        <RotateCcw size={17} />
-                        <span>
-                          <strong>{e.type}</strong>
-                          <small>
-                            {e.id} · attempt {a.number}
-                          </small>
-                        </span>
-                        <Status value={a.code === 200 ? 'delivered' : 'failed'} />
-                        <time>{formatTime(a.at)}</time>
-                        <ChevronRight size={14} />
+                        <div>
+                          <strong>{row.type}</strong>
+                          <span>
+                            Attempt {attempt.number} · {time(attempt.at)} UTC · {attempt.duration}{' '}
+                            ms
+                          </span>
+                        </div>
+                        <Status value={attempt.code === 200 ? 'delivered' : 'failed'} />
+                        <ChevronRight size={20} />
                       </button>
                     ))}
-                  {!state.events.some((e) => e.attempts.some((a) => a.kind === 'replay')) && (
-                    <div className="empty-state tall">
-                      <RotateCcw size={29} />
-                      <h3>The next attempt starts here.</h3>
-                      <p>Replay a failed event to see its complete recovery trail.</p>
-                      <button
-                        className="button secondary"
-                        onClick={() => {
-                          setNav('Event stream');
-                          setFilter('failed');
-                        }}
-                      >
-                        Find a failed event <ArrowRight size={14} />
-                      </button>
-                    </div>
-                  )}
-                </section>
-              ) : (
-                <section className="content-card settings-page">
-                  <h2>Workspace settings</h2>
-                  <p>
-                    Your browser holds a private workspace token. Keep it safe; it grants access to
-                    this sandbox.
-                  </p>
-                  <div className="settings-row">
-                    <div>
-                      <strong>Persistence</strong>
-                      <span>
-                        {mode === 'cloud'
-                          ? `Cloud database · revision ${revision}`
-                          : 'Explicit local session · not persisted'}
-                      </span>
-                    </div>
-                    <button className="button secondary" onClick={() => void read()}>
-                      <RefreshCw size={14} />
-                      Reconnect
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <RotateCcw size={28} />
+                    <h3>No manual replays yet</h3>
+                    <p>Replay a failed event to record an attempt here.</p>
+                    <button
+                      className="button secondary"
+                      onClick={() => {
+                        setPage('Event stream');
+                        setStatus('failed');
+                      }}
+                    >
+                      View failed events
                     </button>
                   </div>
+                )}
+              </section>
+            )}
+            {page === 'Settings' && (
+              <section className="content-card settings-page">
+                <h2>Workspace settings</h2>
+                <div className="settings-row">
+                  <div>
+                    <h3>Storage</h3>
+                    <p>
+                      {isDemo ? 'Isolated demo capability' : 'Authenticated account workspace'} ·
+                      saved revision {revision}
+                    </p>
+                  </div>
+                  <button className="button secondary" onClick={() => void read()} disabled={busy}>
+                    <RefreshCw size={18} />
+                    Refresh
+                  </button>
+                </div>
+                {mayReadSecret && (
                   <div className="settings-row">
                     <div>
-                      <strong>Signing secret</strong>
-                      <span>Used to verify the exact bytes of inbound requests.</span>
-                      <code>{showSecret ? state.secret : 'whsec_••••••••••••••••••••••••'}</code>
+                      <h3>Signing secret</h3>
+                      <p>Used to verify inbound request bytes.</p>
+                      {showSecret && <code className="secret-value">{state.secret}</code>}
                     </div>
                     <button className="button secondary" onClick={() => setShowSecret(!showSecret)}>
-                      {showSecret ? 'Hide' : 'Reveal'}
+                      {showSecret ? 'Hide secret' : 'Reveal secret'}
                     </button>
                   </div>
-                  <div className="settings-row">
-                    <div>
-                      <strong>Simulation clock</strong>
-                      <span>{new Date(state.clock).toISOString()} · explicit backoff control</span>
-                    </div>
+                )}
+                <div className="settings-row">
+                  <div>
+                    <h3>Simulation clock</h3>
+                    <p>{new Date(state.clock).toISOString()}</p>
+                  </div>
+                  {can('advance-clock') && (
                     <button
                       className="button secondary"
                       disabled={busy}
                       onClick={() => void command({ type: 'advance-clock', seconds: 60 })}
                     >
-                      <Clock3 size={14} />
+                      <Clock3 size={18} />
                       Advance 60s
                     </button>
+                  )}
+                </div>
+                <div className="settings-row">
+                  <div>
+                    <h3>Export events</h3>
+                    <p>Download retained payloads and attempt history.</p>
                   </div>
+                  <button className="button secondary" onClick={exportEvents}>
+                    <ArrowDownToLine size={18} />
+                    Export JSON
+                  </button>
+                </div>
+                {can('reset') && (
                   <div className="settings-row">
                     <div>
-                      <strong>Export event data</strong>
-                      <span>Download all retained event payloads and delivery attempts.</span>
+                      <h3>Reset workspace data</h3>
+                      <p>
+                        Replace captured data with synthetic events and rotate the signing secret.
+                      </p>
                     </div>
-                    <button className="button secondary" onClick={download}>
-                      <ArrowDownToLine size={14} />
-                      Export JSON
+                    <button
+                      className="button danger"
+                      onClick={() => {
+                        setError('');
+                        setModal('reset');
+                      }}
+                    >
+                      <RotateCcw size={18} />
+                      Reset data
                     </button>
                   </div>
-                  <div className="settings-row danger-row">
-                    <div>
-                      <strong>Reset workspace</strong>
-                      <span>
-                        Replace events with fresh synthetic data and rotate the signing secret.
-                      </span>
-                    </div>
-                    <button className="button danger" onClick={() => setModal('reset')}>
-                      <RotateCcw size={14} />
-                      Reset sandbox
-                    </button>
-                  </div>
-                </section>
-              )}
-              <footer className="page-footer">
-                <span>
-                  <span className="tiny-dot" />
-                  {mode === 'cloud' ? 'Cloud connected' : 'Local demo'}
-                  <span className="footer-divider">/</span>All systems simulated downstream
-                </span>
-                <span>
-                  Built with intention <span className="footer-divider">·</span>
-                  <a href="https://singhtanveer.com" target="_blank" rel="noreferrer">
-                    Tanveer Singh <ArrowUpRight size={11} />
-                  </a>
-                </span>
-              </footer>
-            </>
-          ) : null}
-        </main>
-      </div>
-      {toast && (
+                )}
+              </section>
+            )}
+            <footer className="page-footer">
+              <span>Saved workspace · {total} retained events</span>
+              <span>All displayed times are UTC</span>
+            </footer>
+          </>
+        )}
+      </main>
+      {notice && (
         <div className="toast" role="status">
-          <CheckCircle2 size={17} />
-          {toast}
+          <CheckCircle2 size={20} />
+          {notice}
         </div>
       )}
-      {modal && (
+      {modal && modalAllowed && (
         <div className="modal-backdrop" onClick={() => setModal(null)}>
           <section
-            className={'modal ' + (modal === 'setup' ? 'wide' : '')}
+            className={`modal ${modal === 'setup' ? 'wide' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="modal-title"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
           >
             <button
-              className="modal-close"
+              className="modal-close icon-button"
               onClick={() => setModal(null)}
               aria-label="Close dialog"
             >
-              <X size={20} />
+              <X size={22} />
             </button>
-            <div className="modal-icon">
-              {modal === 'sample' ? (
-                <Send size={23} />
-              ) : modal === 'setup' ? (
-                <Terminal size={23} />
-              ) : (
-                <RotateCcw size={23} />
-              )}
-            </div>
             <h2 id="modal-title">
               {modal === 'sample'
                 ? 'Send a sample event'
                 : modal === 'setup'
-                  ? 'Connect your first webhook'
-                  : 'Reset this workspace?'}
+                  ? 'Connect an endpoint'
+                  : 'Reset workspace data?'}
             </h2>
             {error && (
-              <div className="modal-error" role="alert">
+              <div className="notice error" role="alert">
                 {error}
               </div>
             )}
             {modal === 'sample' ? (
               <>
                 <p>
-                  Capture a synthetic request through the API and test a deterministic delivery
+                  The API signs the payload and captures it with the selected simulated delivery
                   scenario.
                 </p>
                 <label className="field-label">
-                  DELIVERY SCENARIO
+                  Delivery scenario
                   <select
                     value={scenario}
-                    onChange={(e) => setScenario(e.target.value as Scenario)}
+                    onChange={(event) => setScenario(event.target.value as Scenario)}
                   >
                     <option value="recover">Fails once, recovers on replay</option>
-                    <option value="success">Always succeeds · 200 OK</option>
-                    <option value="always-fail">Always fails · 503 unavailable</option>
+                    <option value="success">Always succeeds · 200</option>
+                    <option value="always-fail">Always fails · 503</option>
                   </select>
                 </label>
                 <label className="field-label">
-                  JSON PAYLOAD
+                  JSON payload
                   <textarea
                     spellCheck={false}
                     value={raw}
-                    onChange={(e) => setRaw(e.target.value)}
+                    onChange={(event) => setRaw(event.target.value)}
                   />
                 </label>
                 <label className="checkbox-label">
                   <input
                     type="checkbox"
                     checked={invalid}
-                    onChange={(e) => setInvalid(e.target.checked)}
+                    onChange={(event) => setInvalid(event.target.checked)}
                   />
                   Send an invalid signature to test rejection
                 </label>
                 <button
-                  className="button primary modal-submit"
-                  onClick={() => void sample()}
-                  disabled={busy || !state}
+                  className="button primary"
+                  disabled={busy}
+                  onClick={() => void sendSample()}
                 >
-                  {busy ? <LoaderCircle size={16} className="spin" /> : <Send size={16} />}Send
-                  sample event
+                  <Send size={18} />
+                  {busy ? 'Sending…' : 'Send sample event'}
                 </button>
               </>
-            ) : modal === 'setup' ? (
+            ) : modal === 'reset' ? (
               <>
                 <p>
-                  Inbound capture is real. Use your private token and sign the exact JSON body with
-                  your workspace secret.
-                </p>
-                {mode === 'local' && (
-                  <div className="inline-warning">
-                    Local demo has no HTTP capture. Connect the cloud workspace first.
-                  </div>
-                )}
-                <div className="setup-step">
-                  <span>01</span>
-                  <div>
-                    <strong>Your endpoint</strong>
-                    <div className="copy-field">
-                      <code>{endpoint}</code>
-                      <button onClick={() => copy(endpoint)} aria-label="Copy endpoint URL">
-                        <Copy size={14} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="setup-step">
-                  <span>02</span>
-                  <div>
-                    <strong>Workspace bearer token</strong>
-                    <div className="copy-field">
-                      <code>{token.slice(0, 10)}••••••••••••••••</code>
-                      <button onClick={() => void copyToken()} aria-label="Copy workspace token">
-                        <Copy size={14} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="setup-step">
-                  <span>03</span>
-                  <div>
-                    <strong>Sign and send · Node.js 18+</strong>
-                    <p>
-                      The example uses a success scenario. Add{' '}
-                      <code>X-Delivery-Scenario: recover</code> to simulate recovery.
-                    </p>
-                    <pre className="setup-code">{`import { createHmac } from 'node:crypto';\n\nconst body = JSON.stringify({ type: 'order.created' });\nconst secret = '${state?.secret || 'YOUR_SIGNING_SECRET'}';\nconst signature = createHmac('sha256', secret)\n  .update(body).digest('hex');\n\nconst response = await fetch('${endpoint}', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    'Authorization': 'Bearer YOUR_WORKSPACE_TOKEN',\n    'X-Webhook-Signature': 'sha256=' + signature\n  },\n  body\n});\nconsole.log(await response.json());`}</pre>
-                    <button className="button secondary" onClick={() => void copyExample()}>
-                      <Copy size={14} />
-                      Copy runnable example
-                    </button>
-                  </div>
-                </div>
-                <div className="inline-note">
-                  <ShieldCheck size={16} />
-                  Your token and secret belong to this browser’s isolated sandbox.
-                </div>
-              </>
-            ) : (
-              <>
-                <p>
-                  This replaces all captured events and delivery history with a fresh synthetic
-                  dataset. Your signing secret will change.
+                  All captured events and attempt history will be replaced by a new synthetic
+                  dataset. The signing secret will change.
                 </p>
                 <div className="modal-actions">
                   <button className="button secondary" onClick={() => setModal(null)}>
@@ -1360,13 +1092,92 @@ function App() {
                       if (await command({ type: 'reset' })) {
                         setSelected('');
                         setModal(null);
-                        setToast('Workspace reset. Signing secret rotated.');
+                        setNotice('Workspace reset. Signing secret rotated.');
                       }
                     }}
                   >
-                    Reset workspace
+                    Reset data
                   </button>
                 </div>
+              </>
+            ) : (
+              <>
+                <p>
+                  Sign exact request bytes with the workspace signing secret. Capture acknowledges
+                  storage; downstream delivery remains simulated.
+                </p>
+                <label className="field-label">
+                  Endpoint
+                  <div className="copy-field">
+                    <code>{endpoint}</code>
+                    <button
+                      className="icon-button"
+                      onClick={() => void copy(endpoint)}
+                      aria-label="Copy endpoint"
+                    >
+                      <Copy size={18} />
+                    </button>
+                  </div>
+                </label>
+                {keyControls()}
+                {isDemo ? (
+                  <label className="field-label">
+                    Demo bearer token
+                    <div className="copy-field">
+                      <code>{demoToken.slice(0, 12)}…</code>
+                      <button
+                        className="icon-button"
+                        onClick={() => void copy(getWorkspaceToken(localStorage))}
+                        aria-label="Copy demo token"
+                      >
+                        <Copy size={18} />
+                      </button>
+                    </div>
+                    <span className="field-help">
+                      This capability accesses only the public demo, never your account.
+                    </span>
+                  </label>
+                ) : (
+                  <label className="field-label">
+                    Account integration key
+                    <input
+                      type="password"
+                      value={integrationKey}
+                      onChange={(event) => setIntegrationKey(event.target.value)}
+                      placeholder="Paste a newly issued whk_ integration key"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="field-help">
+                      Account session cookies are never copied into integration examples.
+                      Integration keys are kept only in this page’s memory.
+                    </span>
+                  </label>
+                )}
+                <label className="field-label">
+                  Signing secret
+                  <div className="copy-field">
+                    <code>{showSecret ? state?.secret : 'Hidden'}</code>
+                    <button className="button secondary" onClick={() => setShowSecret(!showSecret)}>
+                      {showSecret ? 'Hide' : 'Reveal'}
+                    </button>
+                  </div>
+                </label>
+                <pre className="setup-code">
+                  <code>{`import { createHmac } from 'node:crypto';\n\nconst body = JSON.stringify({ type: 'order.created' });\nconst signature = createHmac('sha256', 'YOUR_SIGNING_SECRET')\n  .update(body).digest('hex');\n\nconst response = await fetch('${endpoint}', {\n  method: 'POST',\n  headers: {\n    'Content-Type': 'application/json',\n    Authorization: 'Bearer YOUR_INTEGRATION_KEY',\n${!isDemo ? `    'X-Workspace-Id': '${access.workspaceId}',\n` : ''}    'X-Webhook-Signature': 'sha256=' + signature\n  },\n  body\n});\nconsole.log(await response.json());`}</code>
+                </pre>
+                <button
+                  className="button primary"
+                  disabled={!isDemo && !integrationKey.trim()}
+                  onClick={() => void copyExample()}
+                >
+                  <Copy size={18} />
+                  Copy runnable Node.js example
+                </button>
+                <p className="field-help">
+                  Optional header X-Delivery-Scenario: success, recover, or always-fail. Refresh
+                  events after an external capture.
+                </p>
               </>
             )}
           </section>
@@ -1377,6 +1188,8 @@ function App() {
 }
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <AccessRoot app="webhooklab">
+      <App />
+    </AccessRoot>
   </React.StrictMode>,
 );

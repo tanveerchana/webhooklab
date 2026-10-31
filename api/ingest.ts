@@ -1,4 +1,6 @@
-import { mutateWorkspace } from './_lib/store.js';
+import { mutateWorkspace, ContentionError } from './_lib/store.js';
+import { mutateIntegrationWorkspace } from './_lib/account-integration.js';
+import { ApiError, sendApiError, workspaceId } from './_lib/account-http.js';
 import { bearer, json, readRaw, type ApiRequest, type ApiResponse } from './_lib/http.js';
 import { verifySignature } from './_lib/signature.js';
 import {
@@ -15,11 +17,17 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
     json(res, 405, { error: 'Use POST to capture a signed JSON webhook.' });
     return;
   }
-  let token: string;
+  const integrationKey = /^Bearer (whk_ingest_[a-f0-9]{64})$/.exec(
+    req.headers.authorization || '',
+  )?.[1];
+  let token: string | undefined;
+  let accountWorkspaceId: string | undefined;
   try {
-    token = bearer(req);
-  } catch (e) {
-    json(res, 401, { error: (e as Error).message });
+    if (integrationKey) accountWorkspaceId = workspaceId(req);
+    else token = bearer(req);
+  } catch (error) {
+    if (error instanceof ApiError) sendApiError(res, error);
+    else json(res, 401, { error: 'A valid demo token or scoped integration key is required.' });
     return;
   }
   if (
@@ -46,7 +54,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
   }
   try {
     const signature = String(req.headers['x-webhook-signature'] || '');
-    const result = await mutateWorkspace<Workspace>('webhooklab', token, seedWorkspace, (state) => {
+    const apply = (state: Workspace) => {
       const valid = verifySignature(rawBytes, state.secret, signature);
       const next = captureEvent(state, raw, valid, scenario, 'HTTP');
       return {
@@ -58,10 +66,21 @@ export default async function handler(req: ApiRequest, res: ApiResponse) {
           downstream: 'simulated',
         },
       };
-    });
+    };
+    const result = integrationKey
+      ? await mutateIntegrationWorkspace<Workspace>(accountWorkspaceId!, integrationKey, apply)
+      : await mutateWorkspace<Workspace>('webhooklab', token!, seedWorkspace, apply);
     const accepted = result.result as { signatureVerified: boolean };
     json(res, accepted.signatureVerified ? 202 : 401, result.result);
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiError) {
+      sendApiError(res, error);
+      return;
+    }
+    if (error instanceof ContentionError) {
+      json(res, 409, { error: error.message });
+      return;
+    }
     json(res, 503, {
       error:
         'Cloud persistence is unavailable. The webhook was not acknowledged. Retry after reconnecting.',

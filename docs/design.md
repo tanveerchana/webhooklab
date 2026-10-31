@@ -1,11 +1,9 @@
-# WebhookLab design
+# Interface design
 
-WebhookLab is a focused webhook inspection and recovery workbench. Real inbound capture and isolated cloud persistence surround an explicitly simulated downstream delivery engine. A charcoal canvas, crisp type, mint feedback, thin dividers, and spacious inspector make operational information readable. Event status is always expressed in text as well as color. The responsive interface supports keyboard interaction, event searching, failure filtering, payload inspection, attempt history, sample delivery, JSON export, and reset.
+WebhookLab uses a neutral application layout: light gray canvas, white panels, slate text, and blue action controls. Body text starts at 16 px, event rows use 14 px, supporting metadata stays at least 12 px, and controls have a 44 px minimum target. Panels align to an 8/16/24 px spacing scale. Status appears in text as well as muted color.
 
-## Implementation plan
+The primary workflow is a searchable event table beside an inspector with payload, metadata, and attempt tabs. On narrower screens the inspector stacks beneath the table. Manual replay explains backoff and exposes explicit simulation-clock advancement. Separate pages cover retained-event totals, endpoints and integration keys, replay history, and settings.
 
-1. Write and observe failing domain tests for JSON validation, HMAC failures, bounded retries, clock/backoff, and event filtering.
-2. Implement typed domain engine, deterministic seed data, and Node HMAC helpers.
-3. Integrate authenticated workspace persistence and raw inbound capture through Vercel API routes.
-4. Build the responsive event console, setup panel, live sample sender, and recovery interactions.
-5. Verify tests, TypeScript, production build, and browser behavior; document simulation boundaries and deployment configuration.
+The account shell provides sign-in, sign-up, explicit demo entry, workspace selection, role display, and team management. Application controls follow shared permission helpers, while server and database authorization remain authoritative. Account state is remounted when mode or selected workspace changes. Signing secrets are hidden from viewer responses; integration keys are shown only in memory after owner-authorized creation.
+
+The interface states that seeded events and downstream delivery are simulated. Inbound HTTP capture is real. No decorative trend charts, promotional panels, gradients, glows, or compact dashboard typography are used.
