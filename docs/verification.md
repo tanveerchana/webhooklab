@@ -1,6 +1,6 @@
 # Verification record
 
-Verified on 31 October 2026. This is an engineering portfolio demo using synthetic data.
+Hosted browser workflows verified on 1 November 2026. This is an engineering portfolio application using synthetic demonstration data and simulated downstream delivery.
 
 ## Local quality checks
 
@@ -11,11 +11,19 @@ Verified on 31 October 2026. This is an engineering portfolio demo using synthet
 
 The checked-in GitHub Actions workflow runs installation, tests, types, formatting and a production build on pushes and pull requests. It does not deploy or receive production credentials.
 
-## Earlier hosted demo workflow check
+## Hosted browser workflow check — 1 November 2026
 
-A real signed HTTP request containing whitespace and Unicode escapes returned 202. Changing the exact bytes while retaining the signature returned 401; malformed JSON returned 400. The capture history persisted. In the hosted browser, replay moved a failed simulated delivery from 503 to 200 and retained both attempts. Reload preserved the workspace. Charts derive their series from retained events.
+Tested the live application at https://webhooklab-umber.vercel.app/ using a separate browser tab. The initial gate showed **Log in**, **Create account**, and an explicit **Try demo** action. Switching to Create account showed the twelve-character password and email-confirmation guidance; no credentials were entered and no signup was submitted.
 
-Live demo: https://webhooklab-umber.vercel.app
+Try demo opened the neutral, readable workspace with a demo label and a statement that account workspaces are separate. The initial retained-event count was 28. Through the hosted sample form, a synthetic `qa.hosted_recovery` event (`evt_bca05030b68d4b61`) was captured using the recover scenario. The inspector showed a verified signature, an initial simulated 503 response, and thirty seconds of retry backoff. Advancing the explicit simulation clock enabled replay. Manual replay produced 200 and preserved both attempts, including the initial failure and successful second attempt.
+
+A full page reload retained the same event, its payload, Delivered status, 200 response, two attempts, and a total of 29 events. **Exit demo / Log in** restored the account gate without showing event data. Re-entering Try demo restored the saved demo workspace and recovered event. These observations establish the explicit demo/account UI boundary and persisted demo workflow; they do not establish an authenticated account-user journey.
+
+Public browser navigation to `/api/auth` returned `{"user":null}`. `/api/team` and `/api/integrations` returned `{"error":"Sign in to open this workspace."}`. No deployment share link was created. The Vercel fetch helper was not used after automatic approval rejected its possible temporary sharing side effect; ordinary public browser reads supplied these observations instead.
+
+The screenshot in [preview.jpg](preview.jpg) is an actual 89,570-byte hosted-browser JPEG captured after recovery persisted. It shows the neutral interface, demo toolbar, event table, and delivered-event inspector. No interface code or deployment was changed during this check; the only application-state writes were the synthetic demo capture, explicit clock advance, and manual replay.
+
+The earlier signed-HTTP verification established that a raw request containing whitespace and Unicode escapes returned 202, changed bytes with the original signature returned 401, and malformed JSON returned 400. That earlier raw-ingestion check was not repeated during this browser-only pass.
 
 ## Account security verification
 
@@ -31,4 +39,4 @@ Storage unit tests also exercise racing initialization, mutation conflicts, boun
 
 ## Verification limits
 
-Desktop browser workflows were exercised manually. Responsive breakpoints and reduced-motion rules are implemented, but dedicated device testing was not performed. Speech recognition, where available, depends on the visitor's browser and was not exercised with a microphone. This demo is not a production security certification, payment integration or real customer operations system. See the README for deliberate limits.
+Desktop demo workflows were exercised in the hosted browser. Responsive breakpoints and reduced-motion rules are implemented, but dedicated device testing was not performed. No real signup email, confirmation link, or full provider signup/confirmation/login journey was exercised. Authenticated owner/editor/viewer dashboard journeys and live integration-key management were not exercised through the browser in this pass. Database rollback tests and injected-provider unit coverage remain separate evidence. This is not a production security certification or real downstream delivery service. See the README for deliberate limits.
